@@ -1,6 +1,8 @@
-﻿using System.Threading.Tasks;
+﻿using System.Collections.Generic;
+using System.Threading.Tasks;
 using GitHub.Models;
 using GitHub.Services;
+using ReactiveUI;
 
 namespace GitHub.ViewModels
 {
@@ -9,6 +11,11 @@ namespace GitHub.ViewModels
     /// </summary>
     public interface IPullRequestReviewCommentThreadViewModel : ICommentThreadViewModel
     {
+        /// <summary>
+        /// Gets the comments in the thread.
+        /// </summary>
+        IReadOnlyReactiveList<ICommentViewModel> Comments { get; }
+
         /// <summary>
         /// Gets the current pull request review session.
         /// </summary>
@@ -30,6 +37,11 @@ namespace GitHub.ViewModels
         DiffSide Side { get; }
 
         /// <summary>
+        /// Gets a value indicating whether comment thread has been marked as resolved by a user.
+        /// </summary>
+        bool IsResolved { get; }
+
+        /// <summary>
         /// Gets a value indicating whether the thread is a new thread being authored, that is not
         /// yet present on the server.
         /// </summary>
@@ -48,10 +60,9 @@ namespace GitHub.ViewModels
         /// <param name="file">The file that the comment is on.</param>
         /// <param name="thread">The thread.</param>
         /// <param name="addPlaceholder">
-        /// Whether to add a placeholder comment at the end of the thread.
+        ///     Whether to add a placeholder comment at the end of the thread.
         /// </param>
-        Task InitializeAsync(
-            IPullRequestSession session,
+        Task InitializeAsync(IPullRequestSession session,
             IPullRequestSessionFile file,
             IInlineCommentThreadModel thread,
             bool addPlaceholder);
@@ -64,8 +75,7 @@ namespace GitHub.ViewModels
         /// <param name="lineNumber">The 0-based line number of the thread.</param>
         /// <param name="side">The side of the diff.</param>
         /// <param name="isEditing">Whether to start the placeholder in edit state.</param>
-        Task InitializeNewAsync(
-            IPullRequestSession session,
+        Task InitializeNewAsync(IPullRequestSession session,
             IPullRequestSessionFile file,
             int lineNumber,
             DiffSide side,

@@ -487,12 +487,15 @@ namespace UnitTests.GitHub.App.ViewModels.GitHubPane
             IPullRequestSessionManager sessionManager = null,
             IMessageDraftStore draftStore = null,
             IPullRequestFilesViewModel files = null,
-            IScheduler timerScheduler = null)
+            IScheduler timerScheduler = null,
+            IAutoCompleteAdvisor autoCompleteAdvisor = null
+            )
         {
             editorService = editorService ?? Substitute.For<IPullRequestEditorService>();
             sessionManager = sessionManager ?? CreateSessionManager();
             draftStore = draftStore ?? Substitute.For<IMessageDraftStore>();
             files = files ?? Substitute.For<IPullRequestFilesViewModel>();
+            autoCompleteAdvisor = autoCompleteAdvisor ?? Substitute.For<IAutoCompleteAdvisor>();
             timerScheduler = timerScheduler ?? DefaultScheduler.Instance;
 
             return new PullRequestReviewAuthoringViewModel(
@@ -501,6 +504,7 @@ namespace UnitTests.GitHub.App.ViewModels.GitHubPane
                 sessionManager,
                 draftStore,
                 files,
+                autoCompleteAdvisor,
                 timerScheduler);
         }
 
@@ -605,18 +609,19 @@ namespace UnitTests.GitHub.App.ViewModels.GitHubPane
             return result;
         }
 
-        static ILocalRepositoryModel CreateLocalRepositoryModel()
+        static LocalRepositoryModel CreateLocalRepositoryModel()
         {
-            var result = Substitute.For<ILocalRepositoryModel>();
-            result.CloneUrl.Returns(new UriString("https://github.com/owner/repo"));
-            result.Owner.Returns("owner");
-            result.Name.Returns("repo");
+            var result = new LocalRepositoryModel
+            {
+                CloneUrl = new UriString("https://github.com/owner/repo"),
+                Name = "repo"
+            };
             return result;
         }
 
         static async Task InitializeAsync(
             IPullRequestReviewAuthoringViewModel target,
-            ILocalRepositoryModel localRepository = null)
+            LocalRepositoryModel localRepository = null)
         {
             localRepository = localRepository ?? CreateLocalRepositoryModel();
 

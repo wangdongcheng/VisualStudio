@@ -172,8 +172,9 @@ namespace GitHub.InlineReviews.UnitTests.ViewModels
         {
             var result = Substitute.For<IViewViewModelFactory>();
             var commentService = Substitute.For<ICommentService>();
+            var autoCompleteAdvisor = Substitute.For<IAutoCompleteAdvisor>();
             result.CreateViewModel<IPullRequestReviewCommentViewModel>().Returns(_ =>
-                new PullRequestReviewCommentViewModel(commentService));
+                new PullRequestReviewCommentViewModel(commentService, autoCompleteAdvisor));
             return result;
         }
 
@@ -182,9 +183,12 @@ namespace GitHub.InlineReviews.UnitTests.ViewModels
             var result = Substitute.For<IPullRequestSession>();
             result.User.Returns(new ActorModel { Login = "Viewer" });
             result.RepositoryOwner.Returns("owner");
-            result.LocalRepository.CloneUrl.Returns(new UriString("https://github.com/owner/repo"));
-            result.LocalRepository.Name.Returns("repo");
-            result.LocalRepository.Owner.Returns("shouldnt-be-used");
+            var localRepository = new LocalRepositoryModel
+            {
+                CloneUrl = new UriString("https://github.com/owner/repo"),
+                Name = "repo"
+            };
+            result.LocalRepository.Returns(localRepository);
             result.PullRequest.Returns(new PullRequestDetailModel
             {
                 Number = 47,

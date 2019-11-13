@@ -7,6 +7,7 @@ using System.Reactive.Linq;
 using System.Threading.Tasks;
 using EnvDTE;
 using GitHub.Commands;
+using GitHub.Primitives;
 using GitHub.Extensions;
 using GitHub.Models;
 using GitHub.Models.Drafts;
@@ -89,13 +90,12 @@ namespace GitHub.Services
 
             try
             {
-                var fullPath = GetAbsolutePath(session.LocalRepository, relativePath);
                 string fileName;
                 string commitSha;
 
                 if (workingDirectory)
                 {
-                    fileName = fullPath;
+                    fileName = Path.Combine(session.LocalRepository.LocalPath, relativePath);
                     commitSha = null;
                 }
                 else
@@ -119,7 +119,7 @@ namespace GitHub.Services
 
                     if (!workingDirectory)
                     {
-                        AddBufferTag(wpfTextView.TextBuffer, session, fullPath, commitSha, null);
+                        AddBufferTag(wpfTextView.TextBuffer, session, relativePath, commitSha, null);
                         EnableNavigateToEditor(textView, session);
                     }
                 }
@@ -232,12 +232,12 @@ namespace GitHub.Services
 
                 var leftText = diffViewer.LeftView.TextBuffer.CurrentSnapshot.GetText();
                 var rightText = diffViewer.RightView.TextBuffer.CurrentSnapshot.GetText();
-                if (leftText == string.Empty)
+                if (leftText.Length == 0)
                 {
                     // Don't show LeftView when empty.
                     diffViewer.ViewMode = DifferenceViewMode.RightViewOnly;
                 }
-                else if (rightText == string.Empty)
+                else if (rightText.Length == 0)
                 {
                     // Don't show RightView when empty.
                     diffViewer.ViewMode = DifferenceViewMode.LeftViewOnly;
@@ -285,7 +285,7 @@ namespace GitHub.Services
         }
 
         /// <inheritdoc/>
-        public async Task<IDifferenceViewer> OpenDiff(
+        public Task<IDifferenceViewer> OpenDiff(
             IPullRequestSession session,
             string relativePath,
             IInlineCommentThreadModel thread)
@@ -294,11 +294,17 @@ namespace GitHub.Services
             Guard.ArgumentNotEmptyString(relativePath, nameof(relativePath));
             Guard.ArgumentNotNull(thread, nameof(thread));
 
-            var diffViewer = await OpenDiff(session, relativePath, thread.CommitSha, scrollToFirstDraftOrDiff: false);
+            return OpenDiff(session, relativePath, thread.CommitSha, thread.LineNumber - 1);
+        }
 
-            var param = (object)new InlineCommentNavigationParams
+        /// <inheritdoc/>
+        public async Task<IDifferenceViewer> OpenDiff(IPullRequestSession session, string relativePath, string headSha, int nextInlineTagFromLine)
+        {
+            var diffViewer = await OpenDiff(session, relativePath, headSha, scrollToFirstDraftOrDiff: false);
+
+            var param = (object) new InlineCommentNavigationParams
             {
-                FromLine = thread.LineNumber - 1,
+                FromLine = nextInlineTagFromLine,
             };
 
             // HACK: We need to wait here for the inline comment tags to initialize so we can find the next inline comment.
@@ -430,7 +436,7 @@ namespace GitHub.Services
         /// <param name="line">The 0-based line we're navigating from.</param>
         /// <param name="matchedLines">The number of similar matched lines in <see cref="toLines"/></param>
         /// <returns>Find the nearest matching line in <see cref="toLines"/>.</returns>
-        public int FindNearestMatchingLine(IList<string> fromLines, IList<string> toLines, int line, out int matchedLines)
+        public static int FindNearestMatchingLine(IList<string> fromLines, IList<string> toLines, int line, out int matchedLines)
         {
             line = line < fromLines.Count ? line : fromLines.Count - 1; // VS shows one extra line at end
             var fromLine = fromLines[line];
@@ -470,13 +476,6 @@ namespace GitHub.Services
             }
 
             return matchingLine;
-        }
-
-        static string GetAbsolutePath(ILocalRepositoryModel localRepository, string relativePath)
-        {
-            var localPath = localRepository.LocalPath;
-            relativePath = relativePath.Replace('/', Path.DirectorySeparatorChar);
-            return Path.Combine(localPath, relativePath);
         }
 
         string GetText(IVsTextView textView)
@@ -555,13 +554,13 @@ namespace GitHub.Services
         void AddBufferTag(
             ITextBuffer buffer,
             IPullRequestSession session,
-            string path,
+            string relativePath,
             string commitSha,
             DiffSide? side)
         {
             buffer.Properties.GetOrCreateSingletonProperty(
                 typeof(PullRequestTextBufferInfo),
-                () => new PullRequestTextBufferInfo(session, path, commitSha, side));
+                () => new PullRequestTextBufferInfo(session, relativePath, commitSha, side));
 
             var projection = buffer as IProjectionBuffer;
 
@@ -569,7 +568,7 @@ namespace GitHub.Services
             {
                 foreach (var source in projection.SourceBuffers)
                 {
-                    AddBufferTag(source, session, path, commitSha, side);
+                    AddBufferTag(source, session, relativePath, commitSha, side);
                 }
             }
         }
@@ -636,9 +635,10 @@ namespace GitHub.Services
                 session.LocalRepository,
                 session.PullRequest))
             {
-                var fileChange = changes.FirstOrDefault(x => x.Path == file.RelativePath);
+                var gitPath = Paths.ToGitPath(file.RelativePath);
+                var fileChange = changes.FirstOrDefault(x => x.Path == gitPath);
                 return fileChange?.Status == LibGit2Sharp.ChangeKind.Renamed ?
-                    fileChange.OldPath : file.RelativePath;
+                    Paths.ToWindowsPath(fileChange.OldPath) : file.RelativePath;
             }
         }
 

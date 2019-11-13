@@ -6,14 +6,12 @@ using GitHub.Factories;
 using GitHub.Models;
 using GitHub.Primitives;
 using GitHub.Services;
-using GitHub.ViewModels;
 using GitHub.ViewModels.GitHubPane;
 using NSubstitute;
 using Octokit;
 using UnitTests;
 using NUnit.Framework;
 using IConnection = GitHub.Models.IConnection;
-using ReactiveUI.Testing;
 using System.Reactive.Concurrency;
 using GitHub.Models.Drafts;
 
@@ -45,18 +43,19 @@ public class PullRequestCreationViewModelTests : TestBaseClass
     struct TestData
     {
         public IServiceProvider ServiceProvider;
-        public ILocalRepositoryModel ActiveRepo;
+        public LocalRepositoryModel ActiveRepo;
         public LibGit2Sharp.IRepository L2Repo;
-        public IRepositoryModel SourceRepo;
-        public IRepositoryModel TargetRepo;
-        public IBranch SourceBranch;
-        public IBranch TargetBranch;
+        public RepositoryModel SourceRepo;
+        public RepositoryModel TargetRepo;
+        public BranchModel SourceBranch;
+        public BranchModel TargetBranch;
         public IGitClient GitClient;
         public IGitService GitService;
         public INotificationService NotificationService;
         public IConnection Connection;
         public IApiClient ApiClient;
         public IModelService ModelService;
+        public IAutoCompleteAdvisor AutoCompleteAdvisor { get; set; }
 
         public IModelServiceFactory GetModelServiceFactory()
         {
@@ -80,28 +79,32 @@ public class PullRequestCreationViewModelTests : TestBaseClass
         var connection = Substitute.For<IConnection>();
         var api = Substitute.For<IApiClient>();
         var ms = Substitute.For<IModelService>();
+        var autoCompleteAdvisor = Substitute.For<IAutoCompleteAdvisor>();
 
         connection.HostAddress.Returns(HostAddress.Create("https://github.com"));
 
-        // this is the local repo instance that is available via TeamExplorerServiceHolder and friends
-        var activeRepo = Substitute.For<ILocalRepositoryModel>();
-        activeRepo.LocalPath.Returns("");
-        activeRepo.Name.Returns(repoName);
-        activeRepo.CloneUrl.Returns(new UriString("http://github.com/" + sourceRepoOwner + "/" + repoName));
-        activeRepo.Owner.Returns(sourceRepoOwner);
+        var activeRepo = new LocalRepositoryModel
+        {
+            LocalPath = "",
+            Name = repoName,
+            CloneUrl = new UriString("http://github.com/" + sourceRepoOwner + "/" + repoName)
+        };
 
         Repository githubRepoParent = null;
         if (repoIsFork)
             githubRepoParent = CreateRepository(targetRepoOwner, repoName, id: 1);
         var githubRepo = CreateRepository(sourceRepoOwner, repoName, id: 2, parent: githubRepoParent);
         var sourceBranch = new BranchModel(sourceBranchName, activeRepo);
-        var sourceRepo = new RemoteRepositoryModel(githubRepo);
+        var sourceRepo = CreateRemoteRepositoryModel(githubRepo);
         var targetRepo = targetRepoOwner == sourceRepoOwner ? sourceRepo : sourceRepo.Parent;
         var targetBranch = targetBranchName != targetRepo.DefaultBranch.Name ? new BranchModel(targetBranchName, targetRepo) : targetRepo.DefaultBranch;
 
-        activeRepo.CurrentBranch.Returns(sourceBranch);
+        gitService.GetBranch(activeRepo).Returns(sourceBranch);
         api.GetRepository(Args.String, Args.String).Returns(Observable.Return(githubRepo));
         ms.ApiClient.Returns(api);
+
+        // Default to returning no branches
+        ms.GetBranches(null).ReturnsForAnyArgs(Observable.Empty<BranchModel>());
 
         // sets up the libgit2sharp repo and branch objects
         var l2repo = SetupLocalRepoMock(gitClient, gitService, remote, sourceBranchName, sourceBranchIsTracking);
@@ -120,17 +123,34 @@ public class PullRequestCreationViewModelTests : TestBaseClass
             NotificationService = notifications,
             Connection = connection,
             ApiClient = api,
-            ModelService = ms
+            ModelService = ms,
+            AutoCompleteAdvisor = autoCompleteAdvisor
         };
+    }
+
+    static RemoteRepositoryModel CreateRemoteRepositoryModel(Repository repository)
+    {
+        var ownerAccount = new GitHub.Models.Account(repository.Owner);
+        var parent = repository.Parent != null ? CreateRemoteRepositoryModel(repository.Parent) : null;
+        var model = new RemoteRepositoryModel(repository.Id, repository.Name, repository.CloneUrl,
+            repository.Private, repository.Fork, ownerAccount, parent, repository.DefaultBranch);
+
+        if (parent != null)
+        {
+            parent.DefaultBranch.DisplayName = parent.DefaultBranch.Id;
+        }
+
+        return model;
     }
 
     [Test]
     public async Task TargetBranchDisplayNameIncludesRepoOwnerWhenForkAsync()
     {
         var data = PrepareTestData("octokit.net", "shana", "master", "octokit", "master", "origin", true, true);
-        var prservice = new PullRequestService(data.GitClient, data.GitService, Substitute.For<IVSGitExt>(), Substitute.For<IGraphQLClientFactory>(), data.ServiceProvider.GetOperatingSystem(), Substitute.For<IUsageTracker>());
+        var prservice = new PullRequestService(data.GitClient, data.GitService, Substitute.For<IVSGitExt>(), Substitute.For<IApiClientFactory>(), Substitute.For<IGraphQLClientFactory>(), data.ServiceProvider.GetOperatingSystem(), Substitute.For<IUsageTracker>());
         prservice.GetPullRequestTemplate(data.ActiveRepo).Returns(Observable.Empty<string>());
-        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService, Substitute.For<IMessageDraftStore>());
+        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService,
+            Substitute.For<IMessageDraftStore>(), data.GitService, data.AutoCompleteAdvisor);
         await vm.InitializeAsync(data.ActiveRepo, data.Connection);
         Assert.That("octokit/master", Is.EqualTo(vm.TargetBranch.DisplayName));
     }
@@ -164,8 +184,9 @@ public class PullRequestCreationViewModelTests : TestBaseClass
         var targetBranch = data.TargetBranch;
         var ms = data.ModelService;
 
-        var prservice = new PullRequestService(data.GitClient, data.GitService, Substitute.For<IVSGitExt>(), Substitute.For<IGraphQLClientFactory>(), data.ServiceProvider.GetOperatingSystem(), Substitute.For<IUsageTracker>());
-        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService, Substitute.For<IMessageDraftStore>());
+        var prservice = new PullRequestService(data.GitClient, data.GitService, Substitute.For<IVSGitExt>(), Substitute.For<IApiClientFactory>(), Substitute.For<IGraphQLClientFactory>(), data.ServiceProvider.GetOperatingSystem(), Substitute.For<IUsageTracker>());
+        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService,
+            Substitute.For<IMessageDraftStore>(), data.GitService, data.AutoCompleteAdvisor);
         await vm.InitializeAsync(data.ActiveRepo, data.Connection);
 
         // the TargetBranch property gets set to whatever the repo default is (we assume master here),
@@ -208,7 +229,7 @@ public class PullRequestCreationViewModelTests : TestBaseClass
         prservice.GetPullRequestTemplate(data.ActiveRepo).Returns(Observable.Return("Test PR template"));
 
         var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService,
-            Substitute.For<IMessageDraftStore>());
+            Substitute.For<IMessageDraftStore>(), data.GitService, data.AutoCompleteAdvisor);
         await vm.InitializeAsync(data.ActiveRepo, data.Connection);
 
         Assert.That("Test PR template", Is.EqualTo(vm.Description));
@@ -227,7 +248,8 @@ public class PullRequestCreationViewModelTests : TestBaseClass
             });
 
         var prservice = Substitute.For<IPullRequestService>();
-        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService, draftStore);
+        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService,
+            draftStore, data.GitService, data.AutoCompleteAdvisor);
         await vm.InitializeAsync(data.ActiveRepo, data.Connection);
 
         Assert.That(vm.PRTitle, Is.EqualTo("This is a Title."));
@@ -241,7 +263,8 @@ public class PullRequestCreationViewModelTests : TestBaseClass
         var scheduler = new HistoricalScheduler();
         var draftStore = Substitute.For<IMessageDraftStore>();
         var prservice = Substitute.For<IPullRequestService>();
-        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService, draftStore, scheduler);
+        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService,
+            draftStore, data.GitService, data.AutoCompleteAdvisor, scheduler);
         await vm.InitializeAsync(data.ActiveRepo, data.Connection);
 
         vm.Description = "Body changed.";
@@ -263,7 +286,8 @@ public class PullRequestCreationViewModelTests : TestBaseClass
         var scheduler = new HistoricalScheduler();
         var draftStore = Substitute.For<IMessageDraftStore>();
         var prservice = Substitute.For<IPullRequestService>();
-        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService, draftStore, scheduler);
+        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService,
+            draftStore, data.GitService, data.AutoCompleteAdvisor, scheduler);
         await vm.InitializeAsync(data.ActiveRepo, data.Connection);
 
         vm.PRTitle = "Title changed.";
@@ -285,7 +309,8 @@ public class PullRequestCreationViewModelTests : TestBaseClass
         var scheduler = new HistoricalScheduler();
         var draftStore = Substitute.For<IMessageDraftStore>();
         var prservice = Substitute.For<IPullRequestService>();
-        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService, draftStore, scheduler);
+        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService, draftStore,
+            data.GitService, data.AutoCompleteAdvisor, scheduler);
         await vm.InitializeAsync(data.ActiveRepo, data.Connection);
 
         await vm.CreatePullRequest.Execute();
@@ -300,7 +325,8 @@ public class PullRequestCreationViewModelTests : TestBaseClass
         var scheduler = new HistoricalScheduler();
         var draftStore = Substitute.For<IMessageDraftStore>();
         var prservice = Substitute.For<IPullRequestService>();
-        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService, draftStore, scheduler);
+        var vm = new PullRequestCreationViewModel(data.GetModelServiceFactory(), prservice, data.NotificationService, draftStore,
+            data.GitService, data.AutoCompleteAdvisor, scheduler);
         await vm.InitializeAsync(data.ActiveRepo, data.Connection);
 
         await vm.Cancel.Execute();

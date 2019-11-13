@@ -1,9 +1,11 @@
 ﻿using System;
 using System.Reactive.Linq;
 using System.Threading.Tasks;
+using GitHub.Commands;
 using GitHub.Models;
 using GitHub.Services;
 using GitHub.ViewModels.GitHubPane;
+using NSubstitute;
 using NUnit.Framework;
 
 namespace UnitTests.GitHub.App.ViewModels.GitHubPane
@@ -45,7 +47,7 @@ namespace UnitTests.GitHub.App.ViewModels.GitHubPane
             IPullRequestSessionManager sessionManager = null,
             IRepositoryService repositoryService = null,
             IPullRequestService service = null,
-            ILocalRepositoryModel repository = null,
+            LocalRepositoryModel repository = null,
             IConnection connection = null)
         {
             var result = CreateTarget(sessionManager, repositoryService, service);
